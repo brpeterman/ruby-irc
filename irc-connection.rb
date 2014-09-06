@@ -7,6 +7,8 @@
 # This implementation was heavily influenced by the Perl library
 # Net::IRC.
 
+$:.unshift File.dirname(__FILE__)
+
 class IRCConnection
     require 'socket'
     require 'thread'
@@ -60,13 +62,13 @@ class IRCConnection
     # [host] Address of the IRC server.
     # [port] Port the IRC server listens on.
     def connect(host, port)
-        #$stderr.puts "Connecting to server..."
+        $stderr.puts "Connecting to server..." if @debug
         @host, @port = host, port
         
         # Open a TCP connection to the server
         @conn = TCPSocket.open(@host, @port)
         if (@conn) then
-            #$stderr.puts "Connected"
+            $stderr.puts "Connected" if @debug
             @connected = true
             
             # Start the writer thread. Sends messages from the write queue
@@ -84,7 +86,7 @@ class IRCConnection
                             msg = @write_queue.shift
                         end
                         @socket_access.synchronize do
-                            #$stderr.puts "["+Time.now.to_s+"] Writing: "+msg
+                            $stderr.puts "["+Time.now.to_s+"] Writing: "+msg if @debug
                             @conn.puts msg.strip+@crlf
                         end
                         band = band + 1
@@ -126,16 +128,16 @@ class IRCConnection
                     rescue EOFError
                         next
                     rescue Errno::ETIMEDOUT => e
-                        $stderr.puts "Connection timed out. Disconnecting."
+                        $stderr.puts "Connection timed out. Disconnecting." if @debug
                         @connected = nil
                     rescue Errno::ECONNRESET => e
-                        $stderr.puts "Connection reset. Disconnecting."
+                        $stderr.puts "Connection reset. Disconnecting." if @debug
                         @connected = nil
                     rescue Errno::ENETUNREACH => e
-                        $stderr.puts "Network unreachable. Disconnecting."
+                        $stderr.puts "Network unreachable. Disconnecting." if @debug
                         @connected = nil
                     rescue Errno::EHOSTUNREACH => e
-                        $stderr.puts "Host unreachable. Disconnecting."
+                        $stderr.puts "Host unreachable. Disconnecting." if @debug
                         @connected = nil
                     end
                     
@@ -150,9 +152,9 @@ class IRCConnection
                 control = {}
                 while(@connected) do
                     if (@queue) then
-                        #$stderr.puts "Processing a "+@queue.command+" event"
-                        if (@handlers[@queue.command]) then
-                            #$stderr.puts "Handling a "+@queue.command+" event"
+                        $stderr.puts "Processing a "+@queue.command+" event" if @debug
+                        if (@handlers[@queue.command] or @generic_handler) then
+                            $stderr.puts "Handling a "+@queue.command+" event" if @debug
                             # Spawn a new thread so we can handle events CONCURRENTLY!
                             # Useful if you want to results of a request before the
                             # current handler ends. Just set up a barrier and you
@@ -162,8 +164,13 @@ class IRCConnection
                                     control[event.command] = Mutex.new
                                 end
                                 control[event.command].synchronize do
-                                    @handlers[event.command].each do |f|
-                                        f.call(event)
+                                    if @handlers[event.command] then
+                                      @handlers[event.command].each do |f|
+                                          f.call(event)
+                                      end
+                                    end
+                                    if @generic_handler then
+                                      @generic_handler.call(event)
                                     end
                                 end
                             end
@@ -181,7 +188,7 @@ class IRCConnection
             [@readThread,@eventThread,@writeThread].each {|t| t.join}
             @conn.close
         else
-            $stderr.puts "Failed to connect."
+            $stderr.puts "Failed to connect." if @debug
         end
     end
     
@@ -195,13 +202,13 @@ class IRCConnection
         # Notice when we've been killed
         add_handler('kill') do |event|
             @connected = nil
-            $stderr.puts "Disconnected from server. (KILL: "+event.params[0]+")"
+            $stderr.puts "Disconnected from server. (KILL: "+event.params[0]+")" if @debug
         end
         # Disconnect on fatal error
         add_handler('error') do |event|
             if (event.params[0].index('Closing Link')) then
                 @connected = nil
-                $stderr.puts "Disconnected from server. (ERROR: "+event.params[0]+")"
+                $stderr.puts "Disconnected from server. (ERROR: "+event.params[0]+")" if @debug
             end
         end
         # Reply to CTCP clientinfo
@@ -277,10 +284,15 @@ class IRCConnection
         end
     end
     
+    # If set, this handler will fire on ALL events
+    def set_generic_handler(&block)
+      @generic_handler = block
+    end
+    
     # Convert a server message to an event and add it to the queue.
     # [msg] Server message to add to the queue.
     def add_event(msg)
-        #$stderr.puts "Adding event: "+msg
+        $stderr.puts "Adding event: "+msg if @debug
         parts, from, command, parstr = nil
         
         # Many messages will start with a sender, indicated by a leading
@@ -362,7 +374,7 @@ class IRCConnection
     def write(msg)
         # Don't let one thread write to the socket after another has closed it!
         if (@connected) then
-            #$stderr.puts "Writing '"+msg.strip+"'"
+            $stderr.puts "Writing '"+msg.strip+"'" if @debug
             # Ensure that only one thread is writing at a time
             @write_access.synchronize do
                 @write_queue.push msg
