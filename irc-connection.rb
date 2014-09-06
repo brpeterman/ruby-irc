@@ -71,34 +71,34 @@ class IRCConnection
             
             # Start the writer thread. Sends messages from the write queue
             # to the server at a specified throughput.
-            $writeThread = Thread.new {
-		        throughput = 20
-		        interval = 20
-		        band = 0
-		        start_time = 0
-		        while (@connected) do
-		            if (@write_queue.length > 0) then
-		            	if (band < throughput) then
-			                msg = ""
-			                @write_access.synchronize do
-			                    msg = @write_queue.shift
-			                end
-			                @socket_access.synchronize do
-			                    #$stderr.puts "["+Time.now.to_s+"] Writing: "+msg
-			                    @conn.puts msg.strip+@crlf
-			                end
-			                band = band + 1
-			            end
-		            else
-		                # Sleep while there's nothing to do.
-		                Thread.stop
-		            end
-		            if (Time.now.to_i - start_time >= interval) then
-		                start_time = Time.now.to_i
-		                band = 0
-		            end
-		        end
-		    }
+            @writeThread = Thread.new do
+              throughput = 20
+              interval = 20
+              band = 0
+              start_time = 0
+              while (@connected) do
+                  if (@write_queue.length > 0) then
+                    if (band < throughput) then
+                        msg = ""
+                        @write_access.synchronize do
+                            msg = @write_queue.shift
+                        end
+                        @socket_access.synchronize do
+                            #$stderr.puts "["+Time.now.to_s+"] Writing: "+msg
+                            @conn.puts msg.strip+@crlf
+                        end
+                        band = band + 1
+                    end
+                  else
+                      # Sleep while there's nothing to do.
+                      Thread.stop
+                  end
+                  if (Time.now.to_i - start_time >= interval) then
+                      start_time = Time.now.to_i
+                      band = 0
+                  end
+              end
+            end
             
             # Send ident information
             if (@password) then
@@ -107,12 +107,12 @@ class IRCConnection
             nick(@nick)
             user(@username, @realname)
             
-            $threads = Array.new
+            @threads = Array.new
             
             # Start a listener thread. Constantly reads the socket
             # and turns messages into events.
             Thread.abort_on_exception = true
-            $readThread = Thread.new {
+            @readThread = Thread.new do
                 while(@connected) do
                     begin
                         msg = @conn.readline
@@ -140,11 +140,11 @@ class IRCConnection
                     end
                     
                 end
-            }
+            end
             
             # Start a thread to handle events. Reads the first event off
             # the queue and calls its handler, if it exists.
-            $eventThread = Thread.new {
+            @eventThread = Thread.new do
                 # Hash of semaphores. Allow only one of each event type
                 # to run at a time.
                 control = {}
@@ -157,15 +157,16 @@ class IRCConnection
                             # Useful if you want to results of a request before the
                             # current handler ends. Just set up a barrier and you
                             # should be good to go.
-                            $threads << Thread.new(@queue) {|event|
+                            @threads << Thread.new(@queue) do |event|
                                 if (!control[event.command]) then
                                     control[event.command] = Mutex.new
                                 end
                                 control[event.command].synchronize do
-                                    @handlers[event.command].each {|f|
-                                        f.call(event) }
+                                    @handlers[event.command].each do |f|
+                                        f.call(event)
+                                    end
                                 end
-                            }
+                            end
                         end
                         dequeue
                     else
@@ -173,11 +174,11 @@ class IRCConnection
                         Thread.stop
                     end
                 end
-                $threads.each {|t| t.join}
-            }
+                @threads.each {|t| t.join}
+            end
             
             # Wait for all threads to terminate before ending execution
-            [$readThread,$eventThread,$writeThread].each {|t| t.join}
+            [@readThread,@eventThread,@writeThread].each {|t| t.join}
             @conn.close
         else
             $stderr.puts "Failed to connect."
@@ -188,46 +189,46 @@ class IRCConnection
     # like, but they probably already do what you want.
     def add_default_handlers
         # Reply to server ping
-        add_handler('ping') {|event|
+        add_handler('ping') do |event|
             write "PONG "+event.params.join(' ')
-        }
+        end
         # Notice when we've been killed
-        add_handler('kill') {|event|
+        add_handler('kill') do |event|
             @connected = nil
             $stderr.puts "Disconnected from server. (KILL: "+event.params[0]+")"
-        }
+        end
         # Disconnect on fatal error
-        add_handler('error') {|event|
+        add_handler('error') do |event|
             if (event.params[0].index('Closing Link')) then
                 @connected = nil
                 $stderr.puts "Disconnected from server. (ERROR: "+event.params[0]+")"
             end
-        }
+        end
         # Reply to CTCP clientinfo
         # Only modify this if you expand the class's features!
-        add_handler('ctcp_clientinfo') {|event|
+        add_handler('ctcp_clientinfo') do |event|
             from = event.from
             nick = from.split('!')[0]
             ctcp_reply(nick, 'CLIENTINFO ACTION CLIENTINFO PING TIME VERSION')
-        }
+        end
         # Reply to CTCP ping
-        add_handler('ctcp_ping') {|event|
+        add_handler('ctcp_ping') do |event|
             from = event.from
             nick = from.split('!')[0]
             ctcp_reply(nick, 'PING '+Time.now.to_i.to_s)
-        }
+        end
         # Reply to CTCP version
-        add_handler('ctcp_version') {|event|
+        add_handler('ctcp_version') do |event|
             from = event.from
             nick = from.split('!')[0]
             ctcp_reply(nick, 'VERSION Ruby-IRC 0.1 by Brandon Peterman')
-        }
+        end
         # Reply to CTCP time
-        add_handler('ctcp_time') {|event|
+        add_handler('ctcp_time') do |event|
             from = event.from
             nick = from.split('!')[0]
             ctcp_reply(nick, 'TIME '+Time.now.ctime)
-        }
+        end
     end
     
     # Mechanism for adding event handlers. An event may have an arbitrary
@@ -239,9 +240,9 @@ class IRCConnection
     #
     # Example:
     #  conn = IRCConnection.new('MyNick', 'myname', 'Real Person')
-    #  conn.add_handler('endofmotd') { |event|
+    #  conn.add_handler('endofmotd') do |event|
     #      conn.join '#somechannel'
-    #  }
+    #  end
     def add_handler(command, &block)
         # Make sure we have a handler hash
         if (!@handlers) then
@@ -345,7 +346,7 @@ class IRCConnection
                 node.next = event
             end
         end
-        $eventThread.run if $eventThread.alive?
+        @eventThread.run if @eventThread.alive?
     end
     
     # Remove an event from the event queue.
@@ -365,7 +366,7 @@ class IRCConnection
             # Ensure that only one thread is writing at a time
             @write_access.synchronize do
                 @write_queue.push msg
-                $writeThread.run if $writeThread.alive?
+                @writeThread.run if @writeThread.alive?
             end
             #@socket_access.synchronize do
             #    @conn.puts msg.strip+@crlf
@@ -431,9 +432,9 @@ class IRCConnection
     # Change modes. Works for both user and channel modes.
     # [target]     User or channel whose mode will be changed.
     # [modestring] Mode specifier. Something like +b or -m.
-    # [limit]      The RFC doesn't actually say what this is.
+    # [limit]      User limit, if using mode +l.
     # [user]       If changing a channel mode, which user is targeted.
-    # [mask]       If the mode is +b+, specify a ban mask.
+    # [mask]       If the mode is +b, specify a ban mask.
     def mode(target, modestring, limit=nil, user=nil, mask=nil)
         write "MODE "+target+" "+modestring+(limit ? " "+limit : "")+(user ? " "+user : "")+(mask ? " "+mask : "")
     end
